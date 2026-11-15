@@ -1,22 +1,58 @@
-# This workflow will build a Swift project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-swift
-
-name: Swift
+name: Build Settings iOS
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
-
     runs-on: macos-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: swift build -v
-    - name: Run tests
-      run: swift test -v
+      - uses: actions/checkout@v4
+
+      - name: Build for Simulator
+        run: |
+          xcodebuild \
+            -project Preferences.xcodeproj \
+            -scheme Preferences \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/SimulatorBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build for iPhone
+        run: |
+          xcodebuild \
+            -project Preferences.xcodeproj \
+            -scheme Preferences \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DeviceBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          ditto "$RUNNER_TEMP/DeviceBuild/Build/Products/Release-iphoneos/Preferences.app" \
+            "$RUNNER_TEMP/ipa/Payload/Preferences.app"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "$RUNNER_TEMP/Preferences-unsigned.ipa" Payload
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Settings-iOS-build
+          path: |
+            ${{ runner.temp }}/SimulatorBuild/Build/Products/Debug-iphonesimulator/Preferences.app
+            ${{ runner.temp }}/Preferences-unsigned.ipa
+          if-no-files-found: error
