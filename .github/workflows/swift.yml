@@ -16,19 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build for Simulator
-        run: |
-          xcodebuild \
-            -project Preferences.xcodeproj \
-            -scheme Preferences \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/SimulatorBuild" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-
-      - name: Build for iPhone
+      - name: Build for iOS device
         run: |
           xcodebuild \
             -project Preferences.xcodeproj \
@@ -37,22 +25,47 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/DeviceBuild" \
+            ARCHS=arm64 \
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Package unsigned IPA
+      - name: Validate and package IPA
         run: |
-          mkdir -p "$RUNNER_TEMP/ipa/Payload"
-          ditto "$RUNNER_TEMP/DeviceBuild/Build/Products/Release-iphoneos/Preferences.app" \
-            "$RUNNER_TEMP/ipa/Payload/Preferences.app"
-          cd "$RUNNER_TEMP/ipa"
-          zip -qry "$RUNNER_TEMP/Preferences-unsigned.ipa" Payload
+          set -euo pipefail
 
-      - name: Upload build
+          APP="$RUNNER_TEMP/DeviceBuild/Build/Products/Release-iphoneos/Preferences.app"
+          INFO="$APP/Info.plist"
+
+          test -d "$APP" || { echo "Preferences.app não foi gerado"; exit 1; }
+          test -f "$INFO" || { echo "Info.plist não foi encontrado dentro do app"; exit 1; }
+
+          EXECUTABLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO")
+          EXECUTABLE="$APP/$EXECUTABLE_NAME"
+          test -f "$EXECUTABLE" || { echo "Executável não encontrado: $EXECUTABLE_NAME"; exit 1; }
+
+          PLATFORM=$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$INFO")
+          test "$PLATFORM" = "iphoneos" || {
+            echo "Plataforma incorreta: $PLATFORM (esperado: iphoneos)"
+            exit 1
+          }
+
+          ARCHS=$(/usr/bin/lipo -archs "$EXECUTABLE")
+          case " $ARCHS " in
+            *" arm64 "*) ;;
+            *) echo "Executável não contém arm64: $ARCHS"; exit 1 ;;
+          esac
+
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          ditto "$APP" "$RUNNER_TEMP/ipa/Payload/Preferences.app"
+          cd "$RUNNER_TEMP/ipa"
+          /usr/bin/zip -qry "$RUNNER_TEMP/Preferences-unsigned.ipa" Payload
+
+          /usr/bin/unzip -l "$RUNNER_TEMP/Preferences-unsigned.ipa" \
+            | grep -F "Payload/Preferences.app/Info.plist"
+
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Settings-iOS-build
-          path: |
-            ${{ runner.temp }}/SimulatorBuild/Build/Products/Debug-iphonesimulator/Preferences.app
-            ${{ runner.temp }}/Preferences-unsigned.ipa
+          name: Preferences-unsigned-IPA
+          path: ${{ runner.temp }}/Preferences-unsigned.ipa
           if-no-files-found: error
